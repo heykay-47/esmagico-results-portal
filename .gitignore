@@ -1,0 +1,8 @@
+node_modules/
+data/
+*.db
+# Sample pack from the brief is confidential; keep it out of the repo.
+students_sample.csv
+students_small.csv
+assignment.pdf
+SAMPLE_PACK_README.md
