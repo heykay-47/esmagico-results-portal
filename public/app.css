@@ -1,0 +1,62 @@
+/* Small additions on top of Tabler. */
+
+.card-dropzone {
+  cursor: pointer;
+  border: 2px dashed var(--tblr-border-color);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.card-dropzone:hover,
+.card-dropzone:focus-within,
+.card-dropzone.is-dragging {
+  border-color: var(--tblr-primary);
+  background-color: var(--tblr-primary-lt);
+}
+
+.table-sort-btn {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  text-transform: inherit;
+  letter-spacing: inherit;
+}
+.table-sort-btn.active {
+  color: var(--tblr-body-color);
+}
+.table-sort-btn:focus-visible {
+  outline: 2px solid var(--tblr-primary);
+  outline-offset: 2px;
+}
+
+table.is-loading {
+  opacity: 0.5;
+  transition: opacity 0.15s ease 0.1s;
+}
+
+.card-result-pass {
+  border-color: var(--tblr-success);
+  background-color: var(--tblr-success-lt);
+}
+.card-result-fail {
+  border-color: var(--tblr-danger);
+  background-color: var(--tblr-danger-lt);
+}
+
+.min-w-0 {
+  min-width: 0;
+}
+
+@media print {
+  .page-body {
+    margin: 0;
+  }
+  .card {
+    break-inside: avoid;
+    box-shadow: none;
+  }
+  .progress-bar {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}
