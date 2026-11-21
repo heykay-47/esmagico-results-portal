@@ -1,0 +1,7 @@
+node_modules
+data
+.git
+*.db
+*.csv
+*.pdf
+SAMPLE_PACK_README.md
