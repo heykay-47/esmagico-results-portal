@@ -54,9 +54,16 @@ export function openDb(path: string): Db {
   return db;
 }
 
-/** Lower case with accents removed, so "jose" finds "José". */
+// Letters that NFD does not split into base letter + accent.
+const FOLD: Record<string, string> = { ø: "o", æ: "ae", œ: "oe", ß: "ss", ł: "l", đ: "d", ð: "d", þ: "th", ı: "i" };
+
+/** Lower case with accents removed, so "jose" finds "José" and "soren" finds "Søren". */
 export function searchKey(s: string): string {
-  return s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+  return s
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[øæœßłđðþı]/g, (c) => FOLD[c]);
 }
 
 export type ImportSummary = {

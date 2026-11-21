@@ -12,6 +12,7 @@ const FILE = [
   "STU001,Aarav Sharma,aarav@example.edu,2012-03-14,9,B,82,74,79,71,86",
   "STU002,José Pereira,jose@example.edu,2013-01-02,8,A,30,90,90,90,90",
   "STU003,Bad Mark,bad@example.edu,2013-01-02,8,A,101,90,90,90,90",
+  "STU004,Søren Iyer,soren@example.edu,2013-01-02,8,C,50,50,50,50,50",
   "STU001,Duplicate Row,dup@example.edu,2012-03-14,9,B,1,1,1,1,1",
 ].join("\r\n");
 
@@ -34,17 +35,17 @@ test("upload reports what was accepted and rejected, then re-upload changes noth
   const first = await (await upload(FILE)).json();
   assert.deepEqual(
     [first.rowsRead, first.imported, first.created, first.rejected, first.problemCount, first.sameFileImportedAt],
-    [4, 2, 2, 2, 2, null],
+    [5, 3, 3, 2, 2, null],
   );
   assert.deepEqual(first.problems.map((p: { line: number; code: string }) => [p.line, p.code]), [
     [4, "OUT_OF_RANGE"],
-    [5, "DUPLICATE_ID"],
+    [6, "DUPLICATE_ID"],
   ]);
 
   const again = await (await upload(FILE)).json();
-  assert.deepEqual([again.created, again.updated, again.unchanged], [0, 0, 2]);
+  assert.deepEqual([again.created, again.updated, again.unchanged], [0, 0, 3]);
   assert.equal(again.sameFileImportedAt, first.createdAt);
-  assert.equal((await getJson("/students")).total, 2);
+  assert.equal((await getJson("/students")).total, 3);
 });
 
 test("a later file updates an existing student instead of duplicating them", async () => {
@@ -65,10 +66,12 @@ test("student report includes the computed result; unknown IDs are a 404", async
 test("search is case- and accent-insensitive, matches IDs, and paginates", async () => {
   const byName = await getJson("/students?q=JOSE");
   assert.deepEqual(byName.items.map((s: { studentId: string }) => s.studentId), ["STU002"]);
+  const folded = await getJson("/students?q=soren");
+  assert.deepEqual(folded.items.map((s: { fullName: string }) => s.fullName), ["Søren Iyer"]);
   const byId = await getJson("/students?q=stu00");
-  assert.equal(byId.total, 2);
+  assert.equal(byId.total, 3);
   const page2 = await getJson("/students?pageSize=10&page=2");
-  assert.deepEqual([page2.total, page2.items.length], [2, 0]);
+  assert.deepEqual([page2.total, page2.items.length], [3, 0]);
   const wildcard = await getJson("/students?q=%25");
   assert.equal(wildcard.total, 0, "a literal % must not match everything");
 });
@@ -79,7 +82,7 @@ test("problem report downloads as CSV with every problem", async () => {
   const csv = await (await fetch(`${base}/imports/${firstId}/problems.csv`)).text();
   const lines = csv.trim().split("\r\n");
   assert.equal(lines.length, 3);
-  assert.match(lines[2], /^5,STU001,student_id,DUPLICATE_ID,/);
+  assert.match(lines[2], /^6,STU001,student_id,DUPLICATE_ID,/);
 });
 
 test("bad files get a clear error and the app keeps serving", async () => {
@@ -95,5 +98,5 @@ test("bad files get a clear error and the app keeps serving", async () => {
   assert.match((await missing.json()).error, /missing these columns/);
 
   assert.equal((await fetch(`${base}/health`)).status, 200);
-  assert.equal((await getJson("/students")).total, 2, "failed uploads must not change data");
+  assert.equal((await getJson("/students")).total, 3, "failed uploads must not change data");
 });
