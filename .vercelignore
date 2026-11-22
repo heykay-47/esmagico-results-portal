@@ -1,0 +1,11 @@
+.git
+.env*
+.vercel
+node_modules
+data
+*.db
+*.db-*
+*.csv
+*.pdf
+SAMPLE_PACK_README.md
+public/vendor

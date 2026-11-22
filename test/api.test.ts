@@ -100,3 +100,30 @@ test("bad files get a clear error and the app keeps serving", async () => {
   assert.equal((await fetch(`${base}/health`)).status, 200);
   assert.equal((await getJson("/students")).total, 3, "failed uploads must not change data");
 });
+
+test("hosted uploads require the configured password; browsing stays public", async () => {
+  const db = openDb(":memory:");
+  const password = "test password % ✓";
+  const demo = createApp(db, {
+    today: () => ({ year: 2026, month: 11, day: 18 }),
+    requireImportPassword: true,
+    importPassword: password,
+    uploadLimit: 1024,
+  }).listen(0);
+  try {
+    await new Promise((resolve) => demo.once("listening", resolve));
+    const url = `http://127.0.0.1:${(demo.address() as AddressInfo).port}/api`;
+    const request = (headers: Record<string, string>) => fetch(`${url}/imports`, { method: "POST", body: FILE, headers });
+    assert.deepEqual(await (await fetch(`${url}/import-settings`)).json(), {
+      maxBytes: 1024, passwordRequired: true, enabled: true,
+    });
+    assert.equal((await request({})).status, 403);
+    assert.equal((await request({ "x-demo-password": "%" })).status, 403);
+    assert.equal((await (await fetch(`${url}/students`)).json()).total, 0);
+    assert.equal((await request({ "x-demo-password": encodeURIComponent(password) })).status, 201);
+    assert.equal((await (await fetch(`${url}/students`)).json()).total, 3);
+  } finally {
+    await new Promise<void>((resolve) => demo.close(() => resolve()));
+    db.close();
+  }
+});

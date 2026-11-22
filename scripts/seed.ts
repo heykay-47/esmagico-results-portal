@@ -8,7 +8,7 @@
 
 import { parseArgs } from "node:util";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import { generate } from "./generate.ts";
 import { analyse } from "../src/analyse.ts";
 import { applyImport, openDb } from "../src/db.ts";
@@ -21,12 +21,13 @@ const { values } = parseArgs({
     "error-rate": { type: "string", default: "0.06" },
     out: { type: "string", default: "data/seed.csv" },
     load: { type: "boolean", default: false },
+    postgres: { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
 });
 
 if (values.help) {
-  console.log("Usage: npm run seed -- [--rows 5000] [--seed 42] [--error-rate 0.06] [--out data/seed.csv] [--load]");
+  console.log("Usage: npm run seed -- [--rows 5000] [--seed 42] [--error-rate 0.06] [--out data/seed.csv] [--load [--postgres]]");
   process.exit(0);
 }
 
@@ -52,7 +53,19 @@ console.log(
 );
 if (!ok) process.exit(1);
 
-if (values.load) {
+if (values.load && values.postgres) {
+  const direct = process.env.DATABASE_URL_UNPOOLED;
+  if (!direct) throw new Error("Set DATABASE_URL_UNPOOLED to the demo database's direct connection URL.");
+  const { migratePostgres, postgresPool, postgresStore } = await import("../src/postgres.ts");
+  const pool = postgresPool(direct);
+  try {
+    await migratePostgres(pool);
+    const summary = await postgresStore(pool).applyImport(analysis, { name: basename(values.out), bytes });
+    console.log(`Loaded Postgres: ${summary.created} new, ${summary.updated} updated, ${summary.unchanged} unchanged, ${summary.rejected} rejected`);
+  } finally {
+    await pool.end();
+  }
+} else if (values.load) {
   const dbPath = process.env.DATABASE_PATH ?? "data/portal.db";
   const db = openDb(dbPath);
   const summary = applyImport(db, analysis, { name: values.out.split("/").pop()!, bytes });

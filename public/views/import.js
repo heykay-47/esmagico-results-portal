@@ -11,7 +11,6 @@ import {
   plural,
 } from "../lib.js";
 
-const MAX_BYTES = 10 * 1024 * 1024;
 const PROBLEMS_PER_PAGE = 50;
 const REQUIRED = [
   "student_id",
@@ -36,12 +35,13 @@ const CODE_INFO = {
 };
 
 /** POST the file as the raw body; XHR (not fetch) so we can show upload progress. */
-function uploadFile(file, onProgress) {
+function uploadFile(file, password, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/imports");
-    xhr.setRequestHeader("Content-Type", "text/csv");
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
     xhr.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
+    if (password) xhr.setRequestHeader("X-Demo-Password", encodeURIComponent(password));
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
     xhr.onload = () => {
       let body = null;
@@ -57,13 +57,13 @@ function uploadFile(file, onProgress) {
 }
 
 /** Problems we can spot before uploading; null when the file looks fine. */
-function precheck(file) {
+function precheck(file, maxBytes) {
   if (/\.(xlsx|xls|xlsm|ods|numbers)$/i.test(file.name)) {
     return "This is a spreadsheet file, not a CSV. In your spreadsheet app choose File → Save As → CSV UTF-8, then pick that file.";
   }
   if (file.size === 0) return "This file is empty.";
-  if (file.size > MAX_BYTES) {
-    return `This file is ${fmtBytes(file.size)}; the limit is ${fmtBytes(MAX_BYTES)}. Split it into smaller files and upload them one at a time.`;
+  if (maxBytes && file.size > maxBytes) {
+    return `This file is ${fmtBytes(file.size)}; the limit is ${fmtBytes(maxBytes)}. Split it into smaller files and upload them one at a time.`;
   }
   return null;
 }
@@ -79,7 +79,10 @@ export function mountImport(root, { navigate }) {
     filter: "",
     page: 1,
     recent: null,
+    settings: null,
+    settingsError: null,
   };
+  let password = "";
 
   root.innerHTML = html`
     ${pageHeader({
@@ -118,7 +121,7 @@ export function mountImport(root, { navigate }) {
   function selectFile(file) {
     if (state.phase !== "idle") return;
     state.file = file;
-    state.precheckError = file ? precheck(file) : null;
+    state.precheckError = file ? precheck(file, state.settings?.maxBytes) : null;
     renderUploadPanel();
   }
 
@@ -143,12 +146,18 @@ export function mountImport(root, { navigate }) {
 
   async function startUpload() {
     const file = state.file;
-    if (!file || state.precheckError || state.phase !== "idle") return;
+    if (!file || state.precheckError || state.phase !== "idle" || !state.settings?.enabled) return;
+    if (state.settings.passwordRequired && !password) {
+      const field = uploadPanel.querySelector("#demo-password");
+      field.reportValidity();
+      field.focus();
+      return;
+    }
     state.phase = "uploading";
     state.progress = 0;
     renderUploadPanel();
     try {
-      const data = await uploadFile(file, (p) => {
+      const data = await uploadFile(file, password, (p) => {
         state.progress = p;
         if (p >= 1) state.phase = "processing";
         renderUploadPanel();
@@ -167,8 +176,11 @@ export function mountImport(root, { navigate }) {
     } finally {
       if (alive) {
         state.phase = "idle";
-        state.file = null;
-        input.value = "";
+        if (state.panel?.kind === "result") {
+          state.file = null;
+          input.value = "";
+          password = "";
+        }
         renderUploadPanel();
         renderResult();
         resultEl.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -177,7 +189,7 @@ export function mountImport(root, { navigate }) {
   }
 
   function renderUploadPanel() {
-    const { file, phase, progress, precheckError } = state;
+    const { file, phase, progress, precheckError, settings, settingsError } = state;
     const busy = phase !== "idle";
     uploadPanel.innerHTML = html`
       <div class="card-body d-flex flex-column">
@@ -191,8 +203,23 @@ export function mountImport(root, { navigate }) {
         <div class="mb-3 small text-secondary">
           Required columns, in any order:
           <div class="mt-1 d-flex flex-wrap gap-1">${REQUIRED.map((c) => html`<code class="text-nowrap">${c}</code>`)}</div>
-          Other columns are ignored. Up to ${fmtBytes(MAX_BYTES)}.
+          Other columns are ignored.${settings ? ` Up to ${fmtBytes(settings.maxBytes)}.` : ""}
         </div>
+        ${settings?.passwordRequired ? html`
+          <div class="alert alert-info py-2">
+            This is a public demo. Upload fictional records only.
+            <a href="/demo-results.csv" download>Download a sample CSV</a>.
+          </div>
+          ${settings.enabled && !busy ? html`
+            <div class="mb-3">
+              <label for="demo-password" class="form-label">Demo upload password</label>
+              <input id="demo-password" type="password" class="form-control" autocomplete="off" required />
+            </div>` : ""}
+          ${!settings.enabled ? html`<p class="text-secondary">Uploads are disabled for this demo.</p>` : ""}` : ""}
+        ${settingsError ? html`
+          <p class="text-danger mb-2" role="alert">${settingsError}</p>
+          <button type="button" class="btn mb-3" id="retry-settings">Retry</button>
+        ` : ""}
         <div class="mt-auto">
           ${busy
             ? html`
@@ -206,12 +233,35 @@ export function mountImport(root, { navigate }) {
                     : html`<div class="progress-bar progress-bar-indeterminate"></div>`}
                 </div>`
             : ""}
-          <button type="button" class="btn btn-primary w-100" id="upload-btn" ${!file || precheckError || busy ? "disabled" : ""}>
+          <button type="button" class="btn btn-primary w-100" id="upload-btn" ${!settings?.enabled || !file || precheckError || busy ? "disabled" : ""}>
             ${busy ? html`<span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>Importing…` : html`${icon("upload")} Upload and import`}
           </button>
         </div>
       </div>`;
     uploadPanel.querySelector("#upload-btn").addEventListener("click", startUpload);
+    uploadPanel.querySelector("#retry-settings")?.addEventListener("click", loadSettings);
+    const field = uploadPanel.querySelector("#demo-password");
+    if (field) {
+      field.value = password;
+      field.addEventListener("input", () => { password = field.value; });
+      field.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") startUpload();
+      });
+    }
+  }
+
+  async function loadSettings() {
+    try {
+      const settings = await api("/import-settings");
+      if (!alive) return;
+      state.settings = settings;
+      state.settingsError = null;
+      if (state.file) state.precheckError = precheck(state.file, settings.maxBytes);
+    } catch (error) {
+      if (!alive) return;
+      state.settingsError = error.message;
+    }
+    renderUploadPanel();
   }
 
   function renderResult() {
@@ -448,6 +498,7 @@ export function mountImport(root, { navigate }) {
   }
 
   renderUploadPanel();
+  loadSettings();
   update();
   loadRecent();
 

@@ -6,3 +6,7 @@ students_sample.csv
 students_small.csv
 assignment.pdf
 SAMPLE_PACK_README.md
+.vercel
+.env*
+public/vendor/
+public/demo-results.csv

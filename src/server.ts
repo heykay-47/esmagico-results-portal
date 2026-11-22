@@ -1,15 +1,12 @@
 import express, { type ErrorRequestHandler, type Request } from "express";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { analyse, FileError } from "./analyse.ts";
 import {
-  applyImport,
-  getImport,
-  getImportProblems,
-  getStudent,
   isSortKey,
-  listImports,
-  listStudents,
+  sqliteStore,
   type Db,
+  type ResultsStore,
 } from "./db.ts";
 import { todayUtc, type CalendarDate } from "./rules.ts";
 import { GRADE_BANDS, PASS_MARK } from "./grading.ts";
@@ -21,7 +18,15 @@ const PAGE_SIZES = [10, 25, 50, 100];
 const publicDir = fileURLToPath(new URL("../public", import.meta.url));
 const tablerDir = fileURLToPath(new URL("../node_modules/@tabler/core/dist", import.meta.url));
 
-type AppOptions = { today?: () => CalendarDate };
+type AppOptions = {
+  today?: () => CalendarDate;
+  serveStatic?: boolean;
+  uploadLimit?: number;
+  importPassword?: string;
+  requireImportPassword?: boolean;
+};
+
+const digest = (value: string) => createHash("sha256").update(value).digest();
 
 /** Error with a status code and a message that is safe to show the administrator. */
 class HttpError extends Error {
@@ -57,11 +62,26 @@ function csvCell(v: string | number): string {
 }
 
 export function createApp(db: Db, options: AppOptions = {}) {
+  return createPortal(sqliteStore(db), options);
+}
+
+export function createPortal(store: ResultsStore, options: AppOptions = {}) {
   const today = options.today ?? (() => todayUtc());
+  const limit = options.uploadLimit ?? MAX_UPLOAD_BYTES;
+  const password = options.importPassword ? digest(options.importPassword) : null;
+  const protectedUploads = options.requireImportPassword || password !== null;
   const app = express();
   app.disable("x-powered-by");
 
   const api = express.Router();
+  api.use((_req, res, next) => {
+    res.set("Cache-Control", "no-store");
+    next();
+  });
+
+  api.get("/import-settings", (_req, res) => {
+    res.json({ maxBytes: limit, passwordRequired: Boolean(protectedUploads), enabled: !protectedUploads || password !== null });
+  });
 
   api.get("/health", (_req, res) => {
     res.json({ ok: true });
@@ -73,42 +93,57 @@ export function createApp(db: Db, options: AppOptions = {}) {
 
   // The browser sends the file as the raw request body (no multipart), with the
   // original file name in a header.
-  api.post("/imports", express.raw({ type: () => true, limit: MAX_UPLOAD_BYTES }), (req, res) => {
+  api.post("/imports", (req, _res, next) => {
+    if (protectedUploads) {
+      if (!password) return next(new HttpError(503, "Uploads are not configured for this demo."));
+      let supplied: string;
+      try {
+        supplied = decodeURIComponent(req.get("x-demo-password") ?? "");
+      } catch {
+        return next(new HttpError(403, "The demo upload password is missing or incorrect."));
+      }
+      if (!timingSafeEqual(digest(supplied), password)) {
+        return next(new HttpError(403, "The demo upload password is missing or incorrect."));
+      }
+    }
+    next();
+  }, express.raw({ type: () => true, limit }), async (req, res) => {
     const bytes: Uint8Array = Buffer.isBuffer(req.body) ? req.body : new Uint8Array();
     const name = fileNameHeader(req);
     const analysis = analyse(bytes, today());
-    const summary = applyImport(db, analysis, { name, bytes });
+    const summary = await store.applyImport(analysis, { name, bytes });
     res.status(201).json({
       ...summary,
       problems: analysis.problems.slice(0, PROBLEMS_IN_RESPONSE),
     });
   });
 
-  api.get("/imports", (_req, res) => {
-    res.json({ items: listImports(db) });
+  api.get("/imports", async (_req, res) => {
+    res.json({ items: await store.listImports() });
   });
 
-  api.get("/imports/:id", (req, res) => {
+  api.get("/imports/:id", async (req, res) => {
     const id = Number(req.params.id);
-    const summary = Number.isInteger(id) ? getImport(db, id) : null;
+    const summary = validImportId(id) ? await store.getImport(id) : null;
     if (!summary) throw new HttpError(404, "That import does not exist.");
-    res.json({ ...summary, problems: getImportProblems(db, id)!.slice(0, PROBLEMS_IN_RESPONSE) });
+    const problems = await store.getImportProblems(id);
+    res.json({ ...summary, problems: problems?.slice(0, PROBLEMS_IN_RESPONSE) ?? [] });
   });
 
-  api.get("/imports/:id/problems.csv", (req, res) => {
+  api.get("/imports/:id/problems.csv", async (req, res) => {
     const id = Number(req.params.id);
-    const problems = Number.isInteger(id) ? getImportProblems(db, id) : null;
+    const problems = validImportId(id) ? await store.getImportProblems(id) : null;
     if (!problems) throw new HttpError(404, "That import does not exist.");
-    const lines = [
-      ["line", "student_id", "field", "code", "problem"].join(","),
-      ...problems.map((p) => [p.line, p.studentId, p.field, p.code, p.message].map(csvCell).join(",")),
-    ];
     res.type("text/csv; charset=utf-8");
     res.attachment(`import-${id}-problems.csv`);
-    res.send("﻿" + lines.join("\r\n") + "\r\n");
+    res.write("\ufeffline,student_id,field,code,problem\r\n");
+    for (const p of problems) {
+      res.write([p.line, p.studentId, p.field, p.code, p.message].map(csvCell).join(",") + "\r\n");
+    }
+    res.end();
   });
 
-  api.get("/students", (req, res) => {
+  api.get("/students", async (req, res) => {
     const pageSize = intParam(req, "pageSize", 25);
     if (!PAGE_SIZES.includes(pageSize)) throw new HttpError(400, `pageSize must be one of ${PAGE_SIZES.join(", ")}`);
     const page = Math.max(1, intParam(req, "page", 1));
@@ -116,7 +151,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
     const section = typeof req.query.section === "string" ? req.query.section.toUpperCase() : undefined;
     const sort = typeof req.query.sort === "string" && isSortKey(req.query.sort) ? req.query.sort : "id";
     const q = typeof req.query.q === "string" ? req.query.q.slice(0, 100) : undefined;
-    const result = listStudents(db, {
+    const result = await store.listStudents({
       q,
       gradeLevel: grade,
       section: section || undefined,
@@ -128,8 +163,8 @@ export function createApp(db: Db, options: AppOptions = {}) {
     res.json({ ...result, page, pageSize });
   });
 
-  api.get("/students/:id", (req, res) => {
-    const student = getStudent(db, req.params.id);
+  api.get("/students/:id", async (req, res) => {
+    const student = await store.getStudent(req.params.id);
     if (!student) throw new HttpError(404, `No student with ID ${req.params.id}.`);
     res.json(student);
   });
@@ -143,7 +178,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
       res.status(err.status).json({ error: err.message });
     } else if (err?.type === "entity.too.large") {
       res.status(413).json({
-        error: `The file is larger than ${MAX_UPLOAD_BYTES / 1024 / 1024} MB. Split it into smaller files and upload them one at a time.`,
+        error: `The file is larger than ${limit / 1024 / 1024} MB. Split it into smaller files and upload them one at a time.`,
         code: "FILE_TOO_LARGE",
       });
     } else {
@@ -154,6 +189,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
   api.use(onError);
 
   app.use("/api", api);
+  if (options.serveStatic === false) return app;
   app.use("/vendor/tabler", express.static(tablerDir, { maxAge: "7d" }));
   app.use(express.static(publicDir, { index: false }));
   // Single-page app: every other GET serves the shell and the client routes.
@@ -163,3 +199,5 @@ export function createApp(db: Db, options: AppOptions = {}) {
 
   return app;
 }
+
+const validImportId = (id: number) => Number.isInteger(id) && id > 0 && id <= 2_147_483_647;

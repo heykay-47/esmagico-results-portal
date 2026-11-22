@@ -8,9 +8,9 @@ import type { Analysis, RowProblem } from "./analyse.ts";
 import { SUBJECTS, type Marks, type StudentRecord } from "./rules.ts";
 import { computeResult, type Result } from "./grading.ts";
 
-const SUBJECT_COLS = SUBJECTS.map((s) => s.key);
+export const SUBJECT_COLS = SUBJECTS.map((s) => s.key);
 
-const SCHEMA = `
+export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS students (
   student_id      TEXT PRIMARY KEY,
   full_name       TEXT NOT NULL,
@@ -83,7 +83,7 @@ export type ImportSummary = {
   sameFileImportedAt: string | null;
 };
 
-type ImportRow = {
+export type ImportRow = {
   id: number;
   file_name: string;
   file_size: number;
@@ -98,7 +98,7 @@ type ImportRow = {
   file_sha256: string;
 };
 
-function toSummary(row: ImportRow, sameFileImportedAt: string | null): ImportSummary {
+export function toSummary(row: ImportRow, sameFileImportedAt: string | null): ImportSummary {
   return {
     id: row.id,
     fileName: row.file_name,
@@ -116,7 +116,7 @@ function toSummary(row: ImportRow, sameFileImportedAt: string | null): ImportSum
   };
 }
 
-function sameStudent(existing: Record<string, unknown>, s: StudentRecord): boolean {
+export function sameStudent(existing: Record<string, unknown>, s: StudentRecord): boolean {
   return (
     existing.full_name === s.fullName &&
     existing.email === s.email &&
@@ -234,7 +234,7 @@ export type StudentListItem = {
   passed: boolean;
 };
 
-function rowToDetail(r: Record<string, unknown>): StudentDetail {
+export function rowToDetail(r: Record<string, unknown>): StudentDetail {
   const marks = Object.fromEntries(SUBJECT_COLS.map((c) => [c, r[c] as number])) as Marks;
   return {
     studentId: r.student_id as string,
@@ -273,7 +273,7 @@ export type ListQuery = {
   pageSize: number;
 };
 
-export function listStudents(db: Db, query: ListQuery): { items: StudentListItem[]; total: number } {
+export function studentListSql(query: ListQuery) {
   const where: string[] = [];
   const params: (string | number)[] = [];
   const q = query.q?.trim();
@@ -291,28 +291,51 @@ export function listStudents(db: Db, query: ListQuery): { items: StudentListItem
     params.push(query.section);
   }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const total = (db.prepare(`SELECT count(*) AS n FROM students ${whereSql}`).get(...params) as { n: number }).n;
   const dir = query.desc ? "DESC" : "ASC";
   const order = SORTS[query.sort ?? "id"]
     .split(", ")
     .map((c) => `${c} ${dir}`)
     .join(", ");
-  const rows = db
-    .prepare(`SELECT * FROM students ${whereSql} ORDER BY ${order}, student_id LIMIT ? OFFSET ?`)
-    .all(...params, query.pageSize, (query.page - 1) * query.pageSize) as Record<string, unknown>[];
   return {
-    total,
-    items: rows.map((r) => {
-      const d = rowToDetail(r);
-      return {
-        studentId: d.studentId,
-        fullName: d.fullName,
-        gradeLevel: d.gradeLevel,
-        section: d.section,
-        percentage: d.result.percentage,
-        grade: d.result.grade,
-        passed: d.result.passed,
-      };
-    }),
+    count: `SELECT count(*) AS n FROM students ${whereSql}`,
+    page: `SELECT * FROM students ${whereSql} ORDER BY ${order}, student_id LIMIT ? OFFSET ?`,
+    params,
+    pagination: [query.pageSize, (query.page - 1) * query.pageSize],
+  };
+}
+
+export function rowToListItem(row: Record<string, unknown>): StudentListItem {
+  const { studentId, fullName, gradeLevel, section, result } = rowToDetail(row);
+  return { studentId, fullName, gradeLevel, section, percentage: result.percentage, grade: result.grade, passed: result.passed };
+}
+
+export function listStudents(db: Db, query: ListQuery): StudentPage {
+  const sql = studentListSql(query);
+  const { n } = db.prepare(sql.count).get(...sql.params) as { n: number };
+  const rows = db.prepare(sql.page).all(...sql.params, ...sql.pagination);
+  return { total: n, items: rows.map(rowToListItem) };
+}
+
+type StudentPage = { items: StudentListItem[]; total: number };
+type ResultOf<T> = T | Promise<T>;
+export type ImportFile = { name: string; bytes: Uint8Array };
+
+export type ResultsStore = {
+  applyImport(analysis: Analysis, file: ImportFile): ResultOf<ImportSummary>;
+  getImport(id: number): ResultOf<ImportSummary | null>;
+  getImportProblems(id: number): ResultOf<RowProblem[] | null>;
+  listImports(): ResultOf<ImportSummary[]>;
+  listStudents(query: ListQuery): ResultOf<StudentPage>;
+  getStudent(id: string): ResultOf<StudentDetail | null>;
+};
+
+export function sqliteStore(db: Db): ResultsStore {
+  return {
+    applyImport: (analysis, file) => applyImport(db, analysis, file),
+    getImport: (id) => getImport(db, id),
+    getImportProblems: (id) => getImportProblems(db, id),
+    listImports: () => listImports(db),
+    listStudents: (query) => listStudents(db, query),
+    getStudent: (id) => getStudent(db, id),
   };
 }

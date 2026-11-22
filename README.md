@@ -4,6 +4,19 @@ An administrator uploads a CSV of term results. The portal imports the valid row
 
 Design decisions and trade-offs are in [NOTES.md](NOTES.md).
 
+## Hosted demo
+
+[Open the hosted Results Portal](https://esmagico-results-portal.vercel.app). It uses Vercel Hobby and Neon Free. Browse the generated student records without signing in. On **Import**, you can inspect a seeded import and download a fictional CSV. Uploads require a separate demo password and are limited to 4 MiB. Anything uploaded is publicly visible, so never upload real student records or the confidential assignment pack.
+
+To redeploy from a linked Vercel project, configure the Neon Free integration for production and set `DEMO_IMPORT_PASSWORD` as a secret in Vercel. For a new, empty demo database, use `DATABASE_URL_UNPOOLED` from a private environment file to set up the tables and seed them:
+
+```bash
+node --env-file=/path/to/private-neon.env scripts/seed.ts --out data/generated-results.csv --load --postgres
+vercel deploy --prod
+```
+
+The app uses the integration's pooled `DATABASE_URL` at runtime. The Docker and local run commands below still use SQLite and need no cloud credentials.
+
 ## Run it with Docker
 
 You need Docker. Build the image and start a container:
@@ -85,3 +98,7 @@ public/           Browser app: plain ES modules and Tabler, no build step
 scripts/          Messy-data generator and seed command
 test/             node:test suites
 ```
+
+## License
+
+The project source code is licensed under [GNU GPL v3.0 only](LICENSE). The assignment brief and supplied sample data are not included or covered by this license. Third-party dependencies retain their own licenses.

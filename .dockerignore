@@ -5,3 +5,6 @@ data
 *.csv
 *.pdf
 SAMPLE_PACK_README.md
+.env*
+.vercel
+public/vendor

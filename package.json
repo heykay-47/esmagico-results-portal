@@ -2,22 +2,29 @@
   "name": "student-results-portal",
   "version": "1.0.0",
   "private": true,
+  "license": "GPL-3.0-only",
   "type": "module",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "start": "node src/main.ts",
     "dev": "node --watch src/main.ts",
     "test": "node --test \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
-    "seed": "node scripts/seed.ts"
+    "seed": "node scripts/seed.ts",
+    "build:vercel": "node scripts/build-vercel.ts"
   },
   "dependencies": {
     "@tabler/core": "^1.4.0",
-    "express": "^5.1.0"
+    "@vercel/functions": "^3.11.3",
+    "express": "^5.1.0",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
     "typescript": "^5.9.0"
   }
 }
